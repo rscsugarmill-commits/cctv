@@ -1,0 +1,6 @@
+{
+  "name": "CCTV Crane Management System",
+  "description": "ระบบบันทึกและติดตามการติดตั้งและรื้อถอนกล้องวงจรปิดประจำเครน เชื่อมต่อ Google Sheets และ Google Drive จริง",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
