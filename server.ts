@@ -10,10 +10,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = 3000;
-const SPREADSHEET_ID =
-  process.env.GOOGLE_SPREADSHEET_ID || '13QVZGyyxjqNvAXD1X0r8KmWIyk3iW53bJF0u0LUphI8';
-const DRIVE_FOLDER_ID =
-  process.env.GOOGLE_DRIVE_FOLDER_ID || '1kbLUdllMc-WhXXGlXg9UA_2i87SyS4aB';
+// Permanently bound Google Sheet, Drive Folder & Apps Script Web App (shared across all devices)
+const SPREADSHEET_ID = '13QVZGyyxjqNvAXD1X0r8KmWIyk3iW53bJF0u0LUphI8';
+const DRIVE_FOLDER_ID = '1kbLUdllMc-WhXXGlXg9UA_2i87SyS4aB';
+const DEFAULT_GAS_WEB_APP_URL =
+  'https://script.google.com/macros/s/AKfycbyR7aScL9X2AFyhwh-c9G_r_q8gVkiEjSKPzkyTrxHPOo27MSYNMd4Rxub8jrTwLlISrA/exec';
 const DEFAULT_YEAR_NAME = '2569/70';
 
 const SHEET_HEADERS = {
@@ -118,26 +119,88 @@ class HttpError extends Error {
   }
 }
 
-function getAuthContext(req: Request): AuthContext {
-  const authHeader = req.headers.authorization;
-  const gasUrlHeader = (req.headers['x-gas-url'] as string | undefined)?.trim();
-  const gasSecretHeader = (req.headers['x-gas-secret'] as string | undefined)?.trim();
-  const userEmail = (req.headers['x-user-email'] as string | undefined)?.trim() || 'user';
+let cachedServiceToken: { token: string; expiresAt: number } | null = null;
 
-  if (gasUrlHeader) {
-    if (!gasUrlHeader.startsWith('https://script.google.com/')) {
-      throw new HttpError(400, 'URL ของ Google Apps Script ต้องขึ้นต้นด้วย https://script.google.com/');
-    }
+function base64UrlEncode(input: Buffer | string): string {
+  return Buffer.from(input)
+    .toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+async function getServiceAccountAccessToken(): Promise<string | null> {
+  const rawJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!rawJson) return null;
+
+  if (cachedServiceToken && Date.now() < cachedServiceToken.expiresAt - 60_000) {
+    return cachedServiceToken.token;
+  }
+
+  let creds: { client_email: string; private_key: string; token_uri?: string };
+  try {
+    creds = JSON.parse(rawJson);
+  } catch {
+    throw new HttpError(500, 'รูปแบบ GOOGLE_SERVICE_ACCOUNT_JSON ไม่ถูกต้อง');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64UrlEncode(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const payload = base64UrlEncode(
+    JSON.stringify({
+      iss: creds.client_email,
+      scope:
+        'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive',
+      aud: creds.token_uri || 'https://oauth2.googleapis.com/token',
+      exp: now + 3600,
+      iat: now,
+    })
+  );
+
+  const signingInput = `${header}.${payload}`;
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(signingInput);
+  const signature = base64UrlEncode(signer.sign(creds.private_key));
+  const jwt = `${signingInput}.${signature}`;
+
+  const tokenRes = await fetch(creds.token_uri || 'https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion: jwt,
+    }),
+  });
+  const tokenData: any = await tokenRes.json();
+  if (!tokenRes.ok || !tokenData.access_token) {
+    throw new HttpError(
+      500,
+      tokenData?.error_description || 'ไม่สามารถรับ Access Token จาก Service Account ได้'
+    );
+  }
+
+  cachedServiceToken = {
+    token: tokenData.access_token,
+    expiresAt: Date.now() + (Number(tokenData.expires_in) || 3600) * 1000,
+  };
+  return cachedServiceToken.token;
+}
+
+async function getAuthContext(req: Request): Promise<AuthContext> {
+  const userEmail = (req.headers['x-user-email'] as string | undefined)?.trim() || 'system';
+  const gasUrl = process.env.GAS_WEB_APP_URL || DEFAULT_GAS_WEB_APP_URL;
+
+  if (gasUrl) {
     return {
       mode: 'apps_script',
-      gasUrl: gasUrlHeader,
-      gasSecret: gasSecretHeader || process.env.GAS_API_SECRET || '',
+      gasUrl,
+      gasSecret: process.env.GAS_API_SECRET || '',
       userEmail,
     };
   }
 
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    const token = await getServiceAccountAccessToken();
     if (token) {
       return {
         mode: 'google_oauth',
@@ -147,19 +210,10 @@ function getAuthContext(req: Request): AuthContext {
     }
   }
 
-  if (process.env.GAS_WEB_APP_URL) {
-    return {
-      mode: 'apps_script',
-      gasUrl: process.env.GAS_WEB_APP_URL,
-      gasSecret: process.env.GAS_API_SECRET || '',
-      userEmail,
-    };
-  }
-
   throw new HttpError(
-    401,
-    'ยังไม่ได้เชื่อมต่อ Google Workspace หรือ Google Apps Script Web App',
-    'NOT_CONNECTED'
+    503,
+    'ยังไม่ได้กำหนดค่า GAS_WEB_APP_URL หรือ GOOGLE_SERVICE_ACCOUNT_JSON ที่ฝั่งเซิร์ฟเวอร์สำหรับเชื่อมต่อ Google Sheets และ Google Drive',
+    'SERVER_CONFIG_MISSING'
   );
 }
 
@@ -174,7 +228,7 @@ async function callAppsScript(
   const res = await fetch(ctx.gasUrl, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': 'text/plain;charset=utf-8',
     },
     body: JSON.stringify({
       ...payload,
@@ -255,6 +309,20 @@ function rowsToObjects<T extends Record<string, any>>(values: any[][] | undefine
   return out;
 }
 
+function normalizeDateYmd(value: unknown): string {
+  const s = String(value || '').trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return s;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
 function normalizeDataset(raw: any) {
   return {
     spreadsheetTitle: raw.spreadsheetTitle || 'CCTV Crane Database',
@@ -276,7 +344,7 @@ function normalizeDataset(raw: any) {
       year_id: String(r.year_id || ''),
       crane_id: String(r.crane_id || ''),
       install_status: r.install_status === 'INSTALLED' ? 'INSTALLED' : 'NOT_INSTALLED',
-      install_date: String(r.install_date || ''),
+      install_date: normalizeDateYmd(r.install_date),
       install_technician: String(r.install_technician || ''),
       install_image_1_id: String(r.install_image_1_id || ''),
       install_image_1_url: String(r.install_image_1_url || ''),
@@ -284,7 +352,7 @@ function normalizeDataset(raw: any) {
       install_image_2_url: String(r.install_image_2_url || ''),
       install_note: String(r.install_note || ''),
       removal_status: r.removal_status === 'REMOVED' ? 'REMOVED' : 'NOT_REMOVED',
-      removal_date: String(r.removal_date || ''),
+      removal_date: normalizeDateYmd(r.removal_date),
       removal_technician: String(r.removal_technician || ''),
       removal_image_1_id: String(r.removal_image_1_id || ''),
       removal_image_1_url: String(r.removal_image_1_url || ''),
@@ -670,28 +738,27 @@ async function startServer() {
   });
 
   app.get('/api/config', (_req, res) => {
+    const gasUrl = process.env.GAS_WEB_APP_URL || DEFAULT_GAS_WEB_APP_URL;
+    const connectionType = gasUrl
+      ? 'apps_script'
+      : process.env.GOOGLE_SERVICE_ACCOUNT_JSON
+        ? 'service_account'
+        : 'unconfigured';
+
     res.json({
       spreadsheetId: SPREADSHEET_ID,
       driveFolderId: DRIVE_FOLDER_ID,
       defaultYearName: DEFAULT_YEAR_NAME,
-      hasServerGasUrl: Boolean(process.env.GAS_WEB_APP_URL),
+      connected: connectionType !== 'unconfigured',
+      connectionType,
     });
-  });
-
-  app.get('/api/gas-template', (_req, res) => {
-    const gasPath = path.join(__dirname, 'gas', 'Code.gs');
-    if (!fs.existsSync(gasPath)) {
-      res.status(404).json({ error: 'ไม่พบไฟล์ Code.gs' });
-      return;
-    }
-    res.type('text/plain; charset=utf-8').send(fs.readFileSync(gasPath, 'utf-8'));
   });
 
   // Initialize / verify Google Sheets tabs + 43 initial cranes + 2569/70
   app.post(
     '/api/sheets/bootstrap',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       if (ctx.mode === 'apps_script') {
         const data = await callAppsScript(ctx, 'bootstrap');
         res.json(normalizeDataset(data));
@@ -706,7 +773,7 @@ async function startServer() {
   app.get(
     '/api/data',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       if (ctx.mode === 'apps_script') {
         const data = await callAppsScript(ctx, 'getData');
         res.json(normalizeDataset(data));
@@ -721,7 +788,7 @@ async function startServer() {
   app.post(
     '/api/years',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const yearName = String(req.body?.yearName || '').trim();
       if (!yearName) throw new HttpError(400, 'กรุณาระบุชื่อปีการผลิต');
 
@@ -786,7 +853,7 @@ async function startServer() {
   app.put(
     '/api/years/:yearId',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const { yearId } = req.params;
       const yearName = String(req.body?.yearName || '').trim();
       if (!yearName) throw new HttpError(400, 'กรุณาระบุชื่อปีการผลิต');
@@ -817,7 +884,7 @@ async function startServer() {
   app.delete(
     '/api/years/:yearId',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const { yearId } = req.params;
 
       if (ctx.mode === 'apps_script') {
@@ -847,7 +914,7 @@ async function startServer() {
   app.post(
     '/api/cranes',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const craneName = String(req.body?.craneName || '').trim();
       if (!craneName) throw new HttpError(400, 'กรุณาระบุชื่อเครน');
 
@@ -915,7 +982,7 @@ async function startServer() {
   app.put(
     '/api/cranes/:craneId',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const { craneId } = req.params;
       const craneName = String(req.body?.craneName || '').trim();
       if (!craneName) throw new HttpError(400, 'กรุณาระบุชื่อเครน');
@@ -953,7 +1020,7 @@ async function startServer() {
   app.delete(
     '/api/cranes/:craneId',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const { craneId } = req.params;
 
       if (ctx.mode === 'apps_script') {
@@ -983,7 +1050,7 @@ async function startServer() {
   app.post(
     '/api/cranes/reorder',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const orders = req.body?.orders as Record<string, number>;
       if (!orders || typeof orders !== 'object') {
         throw new HttpError(400, 'รูปแบบข้อมูลเรียงลำดับไม่ถูกต้อง');
@@ -1032,7 +1099,7 @@ async function startServer() {
   app.post(
     '/api/drive/upload',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const { fileName, mimeType, base64Data } = req.body || {};
       const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
       if (!base64Data || !mimeType || !allowedTypes.includes(String(mimeType).toLowerCase())) {
@@ -1065,7 +1132,7 @@ async function startServer() {
   app.get(
     '/api/drive/image/:fileId',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const { fileId } = req.params;
       if (!fileId || !/^[a-zA-Z0-9_-]{10,}$/.test(fileId)) {
         throw new HttpError(400, 'รหัสไฟล์ Google Drive ไม่ถูกต้อง');
@@ -1077,7 +1144,13 @@ async function startServer() {
         url.searchParams.set('fileId', fileId);
         if (ctx.gasSecret) url.searchParams.set('secret', ctx.gasSecret);
         const gasRes = await fetch(url.toString(), { redirect: 'follow' });
-        const data: any = await gasRes.json();
+        const gasText = await gasRes.text();
+        let data: any = {};
+        try {
+          data = JSON.parse(gasText);
+        } catch {
+          throw new HttpError(502, 'Google Apps Script ตอบกลับรูปภาพไม่ถูกต้อง');
+        }
         if (!data.ok || !data.base64) {
           throw new HttpError(404, data.error || 'ไม่สามารถดึงรูปภาพจาก Google Drive ได้');
         }
@@ -1114,7 +1187,7 @@ async function startServer() {
   app.put(
     '/api/records/install',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const {
         yearId,
         craneId,
@@ -1217,7 +1290,7 @@ async function startServer() {
   app.put(
     '/api/records/removal',
     asyncHandler(async (req, res) => {
-      const ctx = getAuthContext(req);
+      const ctx = await getAuthContext(req);
       const {
         yearId,
         craneId,

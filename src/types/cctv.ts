@@ -83,7 +83,7 @@ export interface SheetsDataset {
   fetchedAt: string;
 }
 
-export type ConnectionMode = 'disconnected' | 'google_oauth' | 'apps_script';
+export type ConnectionMode = 'loading' | 'connected' | 'unconfigured';
 
 export type AppPage =
   | 'dashboard'
@@ -91,8 +91,7 @@ export type AppPage =
   | 'summary'
   | 'detail'
   | 'years'
-  | 'manage-cranes'
-  | 'setup';
+  | 'manage-cranes';
 
 export interface ToastMessage {
   id: string;

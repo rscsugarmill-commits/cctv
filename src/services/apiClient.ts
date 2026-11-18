@@ -1,47 +1,14 @@
 import type { SheetsDataset } from '../types/cctv';
 
-export interface AuthSession {
-  mode: 'google_oauth' | 'apps_script' | 'disconnected';
-  accessToken?: string | null;
-  gasUrl?: string;
-  gasSecret?: string;
-  userEmail?: string;
-}
-
-let activeSession: AuthSession = { mode: 'disconnected' };
-
-export function setApiAuthSession(session: AuthSession) {
-  activeSession = session;
-}
-
-export function getApiAuthHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const headers: Record<string, string> = {
-    ...extra,
-  };
-  if (activeSession.userEmail) {
-    headers['X-User-Email'] = activeSession.userEmail;
-  }
-  if (activeSession.mode === 'google_oauth' && activeSession.accessToken) {
-    headers['Authorization'] = `Bearer ${activeSession.accessToken}`;
-  } else if (activeSession.mode === 'apps_script' && activeSession.gasUrl) {
-    headers['X-GAS-URL'] = activeSession.gasUrl;
-    if (activeSession.gasSecret) {
-      headers['X-GAS-SECRET'] = activeSession.gasSecret;
-    }
-  }
-  return headers;
-}
-
 async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = getApiAuthHeaders(
-    init.body ? { 'Content-Type': 'application/json' } : {}
-  );
+  const headers: Record<string, string> = {
+    ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(init.headers as Record<string, string> | undefined),
+  };
+
   const res = await fetch(path, {
     ...init,
-    headers: {
-      ...headers,
-      ...(init.headers as Record<string, string> | undefined),
-    },
+    headers,
   });
   const text = await res.text();
   let data: any = {};
@@ -70,14 +37,9 @@ export const apiClient = {
       spreadsheetId: string;
       driveFolderId: string;
       defaultYearName: string;
-      hasServerGasUrl: boolean;
+      connected: boolean;
+      connectionType: 'apps_script' | 'service_account' | 'unconfigured';
     }>('/api/config'),
-
-  getGasTemplate: async (): Promise<string> => {
-    const res = await fetch('/api/gas-template');
-    if (!res.ok) throw new Error('ไม่สามารถโหลดไฟล์แม่แบบ Code.gs ได้');
-    return res.text();
-  },
 
   bootstrapSheets: () => apiRequest<SheetsDataset>('/api/sheets/bootstrap', { method: 'POST' }),
 
@@ -164,9 +126,7 @@ export const apiClient = {
     }),
 
   fetchDriveImageBlobUrl: async (fileId: string): Promise<string> => {
-    const res = await fetch(`/api/drive/image/${encodeURIComponent(fileId)}`, {
-      headers: getApiAuthHeaders(),
-    });
+    const res = await fetch(`/api/drive/image/${encodeURIComponent(fileId)}`);
     if (!res.ok) {
       throw new Error(`โหลดรูปภาพไม่สำเร็จ (${res.status})`);
     }

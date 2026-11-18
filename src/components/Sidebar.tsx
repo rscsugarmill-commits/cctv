@@ -5,8 +5,6 @@ import {
   Database,
   LayoutDashboard,
   ListChecks,
-  LogOut,
-  Settings,
   Wrench,
   X,
 } from 'lucide-react';
@@ -18,8 +16,6 @@ interface SidebarProps {
   mobileOpen: boolean;
   onCloseMobile: () => void;
   connectionMode: ConnectionMode;
-  userEmail?: string;
-  onLogout?: () => void;
 }
 
 const NAV_ITEMS: Array<{ id: AppPage; label: string; icon: typeof LayoutDashboard }> = [
@@ -28,7 +24,6 @@ const NAV_ITEMS: Array<{ id: AppPage; label: string; icon: typeof LayoutDashboar
   { id: 'summary', label: 'สรุปข้อมูล & รายงาน', icon: ClipboardCheck },
   { id: 'years', label: 'จัดการปีการผลิต', icon: CalendarRange },
   { id: 'manage-cranes', label: 'จัดการรายชื่อเครน', icon: Wrench },
-  { id: 'setup', label: 'เชื่อมต่อ Google & คู่มือ', icon: Settings },
 ];
 
 export function Sidebar({
@@ -37,8 +32,6 @@ export function Sidebar({
   mobileOpen,
   onCloseMobile,
   connectionMode,
-  userEmail,
-  onLogout,
 }: SidebarProps) {
   const handleNav = (page: AppPage) => {
     onNavigate(page);
@@ -97,42 +90,22 @@ export function Sidebar({
         })}
       </nav>
 
-      {/* Connection Summary Footer */}
+      {/* Fixed Central Database Info Footer */}
       <div className="border-t border-slate-800 p-4">
         <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
             <Database className="h-3.5 w-3.5 shrink-0 text-blue-400" />
             <span className="truncate">
-              {connectionMode === 'google_oauth'
-                ? 'เชื่อมต่อ Google Workspace'
-                : connectionMode === 'apps_script'
-                  ? 'เชื่อมต่อ Apps Script API'
-                  : 'ยังไม่ได้เชื่อมต่อฐานข้อมูล'}
+              {connectionMode === 'connected'
+                ? 'เชื่อมต่อฐานข้อมูลกลางแล้ว'
+                : connectionMode === 'loading'
+                  ? 'กำลังเชื่อมต่อฐานข้อมูล...'
+                  : 'รอการตั้งค่าเซิร์ฟเวอร์'}
             </span>
           </div>
-          {userEmail && (
-            <p className="mt-1 truncate text-[11px] text-slate-400">{userEmail}</p>
-          )}
-          <div className="mt-2.5 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleNav('setup')}
-              className="flex-1 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-center text-xs font-medium text-slate-200 transition-colors hover:bg-slate-700"
-            >
-              {connectionMode === 'disconnected' ? 'ตั้งค่าการเชื่อมต่อ' : 'จัดการเชื่อมต่อ'}
-            </button>
-            {connectionMode === 'google_oauth' && onLogout && (
-              <button
-                type="button"
-                onClick={onLogout}
-                className="rounded-md border border-slate-700 bg-slate-800 p-1.5 text-slate-300 transition-colors hover:bg-slate-700 hover:text-white"
-                title="ออกจากระบบ Google"
-                aria-label="ออกจากระบบ Google"
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
+          <p className="mt-1 truncate text-[11px] text-slate-400">
+            Google Sheets &amp; Google Drive
+          </p>
         </div>
       </div>
     </div>
@@ -140,12 +113,10 @@ export function Sidebar({
 
   return (
     <>
-      {/* Desktop Fixed Sidebar */}
       <aside className="no-print hidden w-[260px] shrink-0 border-r border-slate-800 lg:block">
         <div className="sticky top-0 h-screen">{sidebarContent}</div>
       </aside>
 
-      {/* Mobile Drawer */}
       {mobileOpen && (
         <div className="no-print fixed inset-0 z-40 flex lg:hidden">
           <div

@@ -22,7 +22,6 @@ const PAGE_TITLES: Record<AppPage, string> = {
   detail: 'รายละเอียดและประวัติเครน',
   years: 'จัดการปีการผลิต',
   'manage-cranes': 'จัดการรายชื่อเครน',
-  setup: 'ตั้งค่า Google Sheets & Drive',
 };
 
 export function TopBar({
@@ -103,7 +102,7 @@ export function TopBar({
           <button
             type="button"
             onClick={onRefresh}
-            disabled={isRefreshing || connectionMode === 'disconnected'}
+            disabled={isRefreshing || connectionMode !== 'connected'}
             className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
             title="รีเฟรชข้อมูลจาก Google Sheets"
           >
@@ -114,7 +113,7 @@ export function TopBar({
           <button
             type="button"
             onClick={onQuickRecord}
-            disabled={connectionMode === 'disconnected' || activeYears.length === 0}
+            disabled={connectionMode !== 'connected' || activeYears.length === 0}
             className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-blue-600 px-3.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />

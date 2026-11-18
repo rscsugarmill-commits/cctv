@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertCircle, ArrowRight, Database } from 'lucide-react';
+import { AlertCircle, Database, Loader2, RefreshCw } from 'lucide-react';
 import { clearDriveImageCache } from './components/DriveImage';
 import { CraneDetailView } from './components/CraneDetailView';
 import { CranesManagementView } from './components/CranesManagementView';
@@ -12,13 +12,11 @@ import { SummaryView } from './components/SummaryView';
 import { ToastContainer } from './components/ToastContainer';
 import { TopBar } from './components/TopBar';
 import { YearsManagementView } from './components/YearsManagementView';
-import { ConnectionSetupView } from './components/ConnectionSetupView';
 import {
   DEFAULT_DRIVE_FOLDER_ID,
   DEFAULT_SPREADSHEET_ID,
 } from './constants/initialData';
-import { apiClient, setApiAuthSession } from './services/apiClient';
-import { googleSignIn, initAuth, logout } from './services/firebaseAuth';
+import { apiClient } from './services/apiClient';
 import type {
   AppPage,
   ConnectionMode,
@@ -68,22 +66,9 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Connection State
-  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('disconnected');
-  const [userEmail, setUserEmail] = useState<string>('');
-  const [gasUrl, setGasUrl] = useState<string>('');
-  const [gasSecret, setGasSecret] = useState<string>('');
-  const [serverConfig, setServerConfig] = useState({
-    spreadsheetId: DEFAULT_SPREADSHEET_ID,
-    driveFolderId: DEFAULT_DRIVE_FOLDER_ID,
-    hasServerGasUrl: false,
-  });
-
-  // Loading & Error State
+  // Connection State (Pure Server -> Google Sheets & Google Drive, zero user login)
+  const [connectionMode, setConnectionMode] = useState<ConnectionMode>('loading');
   const [isLoadingData, setIsLoadingData] = useState(false);
-  const [isSigningIn, setIsSigningIn] = useState(false);
-  const [isConnectingGas, setIsConnectingGas] = useState(false);
-  const [isBootstrapping, setIsBootstrapping] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
 
   // Live Google Sheets Data
@@ -138,6 +123,7 @@ export default function App() {
         }
 
         setDataset(data);
+        setConnectionMode('connected');
         clearDriveImageCache();
 
         const validYears = data.years.filter((y) => y.is_active);
@@ -148,16 +134,11 @@ export default function App() {
       } catch (err: any) {
         const msg = err?.message || 'ไม่สามารถดึงข้อมูลจาก Google Sheets ได้';
         setLastError(msg);
-        if (err?.code === 'INSUFFICIENT_SCOPE') {
-          notify(
-            'warning',
-            'บัญชี Google ยังไม่มีสิทธิ์เข้าถึง Sheets/Drive',
-            'สามารถเชื่อมต่อผ่าน Google Apps Script Web App ในหน้าตั้งค่าได้ทันที'
-          );
+        if (err?.code === 'SERVER_CONFIG_MISSING') {
+          setConnectionMode('unconfigured');
         } else {
           notify('error', 'โหลดข้อมูลไม่สำเร็จ', msg);
         }
-        throw err;
       } finally {
         setIsLoadingData(false);
       }
@@ -165,141 +146,28 @@ export default function App() {
     [notify]
   );
 
-  // Initial server config + Firebase auth listener
-  useEffect(() => {
-    apiClient
-      .getConfig()
-      .then((cfg) => {
-        setServerConfig(cfg);
-        if (cfg.hasServerGasUrl) {
-          setApiAuthSession({ mode: 'apps_script', userEmail: 'server-env' });
-          setConnectionMode('apps_script');
-          loadSheetsData(true).catch(() => {
-            setConnectionMode('disconnected');
-            setApiAuthSession({ mode: 'disconnected' });
-          });
-        }
-      })
-      .catch(() => {
-        // ignore config fetch error
-      });
-
-    const unsub = initAuth(
-      (user, token) => {
-        setApiAuthSession({
-          mode: 'google_oauth',
-          accessToken: token,
-          userEmail: user.email || user.displayName || 'google-user',
-        });
-        setUserEmail(user.email || '');
-        setConnectionMode('google_oauth');
-        loadSheetsData(true).catch(() => {});
-      },
-      (user) => {
-        if (user?.email) setUserEmail(user.email);
+  const initializeConnection = useCallback(async () => {
+    setConnectionMode('loading');
+    setLastError(null);
+    try {
+      const cfg = await apiClient.getConfig();
+      if (!cfg.connected) {
+        setConnectionMode('unconfigured');
+        setLastError(
+          'ยังไม่ได้ตั้งค่า GAS_WEB_APP_URL หรือ GOOGLE_SERVICE_ACCOUNT_JSON ใน Environment ของเซิร์ฟเวอร์'
+        );
+        return;
       }
-    );
-
-    return () => unsub();
+      await loadSheetsData(true);
+    } catch (err: any) {
+      setConnectionMode('unconfigured');
+      setLastError(err?.message || 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้');
+    }
   }, [loadSheetsData]);
 
-  const handleGoogleSignIn = async () => {
-    setIsSigningIn(true);
-    setLastError(null);
-    try {
-      const { user, accessToken } = await googleSignIn();
-      setApiAuthSession({
-        mode: 'google_oauth',
-        accessToken,
-        userEmail: user.email || user.displayName || 'google-user',
-      });
-      setUserEmail(user.email || '');
-      setConnectionMode('google_oauth');
-      await loadSheetsData(true);
-      notify('success', 'เข้าสู่ระบบ Google สำเร็จ', 'เชื่อมต่อ Google Sheets และ Drive เรียบร้อย');
-      setCurrentPage('dashboard');
-    } catch (err: any) {
-      const msg = err?.message || 'เข้าสู่ระบบไม่สำเร็จ';
-      setLastError(msg);
-      setConnectionMode('disconnected');
-      setApiAuthSession({ mode: 'disconnected' });
-      notify('error', 'ไม่สามารถเชื่อมต่อ Google ได้', msg);
-    } finally {
-      setIsSigningIn(false);
-    }
-  };
-
-  const handleGoogleLogout = async () => {
-    await logout();
-    setApiAuthSession({ mode: 'disconnected' });
-    setConnectionMode('disconnected');
-    setUserEmail('');
-    setDataset(EMPTY_DATASET);
-    clearDriveImageCache();
-    notify('info', 'ออกจากระบบแล้ว');
-  };
-
-  const handleConnectGas = async (url: string, secret: string) => {
-    setIsConnectingGas(true);
-    setLastError(null);
-    try {
-      setApiAuthSession({
-        mode: 'apps_script',
-        gasUrl: url,
-        gasSecret: secret,
-        userEmail: userEmail || 'apps-script-user',
-      });
-      setGasUrl(url);
-      setGasSecret(secret);
-      await loadSheetsData(true);
-      setConnectionMode('apps_script');
-      notify(
-        'success',
-        'เชื่อมต่อ Google Apps Script สำเร็จ',
-        'ดึงข้อมูลจริงจาก Google Sheets เรียบร้อยแล้ว'
-      );
-      setCurrentPage('dashboard');
-    } catch (err: any) {
-      setApiAuthSession({ mode: 'disconnected' });
-      setConnectionMode('disconnected');
-      setLastError(err?.message || 'เชื่อมต่อ Google Apps Script ไม่สำเร็จ');
-    } finally {
-      setIsConnectingGas(false);
-    }
-  };
-
-  const handleDisconnectGas = () => {
-    setApiAuthSession({ mode: 'disconnected' });
-    setConnectionMode('disconnected');
-    setGasUrl('');
-    setGasSecret('');
-    setDataset(EMPTY_DATASET);
-    clearDriveImageCache();
-    notify('info', 'ตัดการเชื่อมต่อ Apps Script แล้ว');
-  };
-
-  const handleBootstrapSheets = async () => {
-    setIsBootstrapping(true);
-    setLastError(null);
-    try {
-      const data = await apiClient.bootstrapSheets();
-      setDataset(data);
-      const validYears = data.years.filter((y) => y.is_active);
-      if (!selectedYearId && validYears[0]) {
-        setSelectedYearId(validYears[0].year_id);
-      }
-      notify(
-        'success',
-        'ตรวจสอบและเตรียมโครงสร้าง Google Sheets สำเร็จ',
-        'พบข้อมูล 4 ตาราง พร้อมปี 2569/70 และรายชื่อเครนครบถ้วน'
-      );
-    } catch (err: any) {
-      setLastError(err?.message || 'สร้างโครงสร้าง Google Sheets ไม่สำเร็จ');
-      notify('error', 'เตรียมโครงสร้าง Google Sheets ไม่สำเร็จ', err?.message);
-    } finally {
-      setIsBootstrapping(false);
-    }
-  };
+  useEffect(() => {
+    initializeConnection();
+  }, [initializeConnection]);
 
   const activeYears = useMemo(
     () => dataset.years.filter((y) => y.is_active),
@@ -380,33 +248,72 @@ export default function App() {
     setEditModalState({ open: true, craneId, tab });
   };
 
-  const renderDisconnectedNotice = () => (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div className="rounded-xl border border-amber-200 bg-white p-6">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-            <AlertCircle className="h-5 w-5" />
+  const renderServerConfigNotice = () => (
+    <div className="mx-auto max-w-2xl py-8">
+      <div className="rounded-xl border border-amber-200 bg-white p-6 shadow-xs sm:p-8">
+        <div className="flex items-start gap-3.5">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+            <Database className="h-6 w-6" />
           </div>
           <div>
             <h2 className="text-lg font-bold text-slate-900">
-              ยังไม่ได้เชื่อมต่อฐานข้อมูล Google Sheets และ Google Drive
+              รอการตั้งค่าการเชื่อมต่อฝั่งเซิร์ฟเวอร์ (Google Sheets &amp; Google Drive)
             </h2>
             <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-              ระบบนี้เชื่อมต่อข้อมูลจริงจาก Google Sheets และรูปภาพจริงจาก Google Drive เท่านั้น
-              (ไม่มีการใช้ข้อมูลจำลองหรือ Local Storage แทนฐานข้อมูล)
+              ระบบนี้ไม่ใช้การ Login และไม่ใช้ Firebase โดยทุกอุปกรณ์จะดึงและบันทึกข้อมูลลงใน
+              Google Sheet และ Google Drive ชุดเดียวกันโดยตรงผ่าน Backend ของเซิร์ฟเวอร์
             </p>
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setCurrentPage('setup')}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
-              >
-                <Database className="h-4 w-4" />
-                <span>ไปหน้าตั้งค่าและเชื่อมต่อ Google</span>
-                <ArrowRight className="h-4 w-4" />
-              </button>
-            </div>
           </div>
+        </div>
+
+        <div className="mt-5 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between">
+            <span className="font-medium text-slate-500">Google Sheet ID:</span>
+            <span className="font-mono-num break-all text-slate-800">
+              {DEFAULT_SPREADSHEET_ID}
+            </span>
+          </div>
+          <div className="flex flex-col gap-0.5 sm:flex-row sm:justify-between">
+            <span className="font-medium text-slate-500">Google Drive Folder ID:</span>
+            <span className="font-mono-num break-all text-slate-800">
+              {DEFAULT_DRIVE_FOLDER_ID}
+            </span>
+          </div>
+        </div>
+
+        {lastError && (
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{lastError}</span>
+          </div>
+        )}
+
+        <div className="mt-5 space-y-2 rounded-lg border border-slate-200 bg-white p-4 text-xs leading-relaxed text-slate-700">
+          <p className="font-semibold text-slate-900">วิธีเปิดใช้งานทันทีสำหรับทุกอุปกรณ์:</p>
+          <ol className="list-decimal space-y-1 pl-4">
+            <li>
+              นำไฟล์ <code className="rounded bg-slate-100 px-1 py-0.5">gas/Code.gs</code> ไป
+              Deploy เป็น Google Apps Script Web App (Execute as: Me, Who has access: Anyone)
+            </li>
+            <li>
+              นำ Web App URL ไปใส่ใน Secrets / <code className="rounded bg-slate-100 px-1 py-0.5">.env</code>{' '}
+              ที่ตัวแปร <code className="rounded bg-slate-100 px-1 py-0.5">GAS_WEB_APP_URL</code>{' '}
+              (หรือใส่ <code className="rounded bg-slate-100 px-1 py-0.5">GOOGLE_SERVICE_ACCOUNT_JSON</code>)
+            </li>
+            <li>เมื่อตั้งค่าแล้ว ทุกอุปกรณ์จะเชื่อมต่อเข้าใช้งานข้อมูลชุดเดียวกันทันทีโดยไม่ต้อง Login</li>
+          </ol>
+        </div>
+
+        <div className="mt-6">
+          <button
+            type="button"
+            onClick={initializeConnection}
+            disabled={isLoadingData}
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoadingData ? 'animate-spin' : ''}`} />
+            <span>ตรวจสอบการเชื่อมต่ออีกครั้ง</span>
+          </button>
         </div>
       </div>
     </div>
@@ -420,8 +327,6 @@ export default function App() {
         mobileOpen={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
         connectionMode={connectionMode}
-        userEmail={userEmail}
-        onLogout={handleGoogleLogout}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -442,29 +347,15 @@ export default function App() {
 
         <main className="flex-1 p-4 sm:p-6">
           <div className="mx-auto max-w-[1400px]">
-            {currentPage === 'setup' ? (
-              <ConnectionSetupView
-                connectionMode={connectionMode}
-                userEmail={userEmail}
-                spreadsheetId={serverConfig.spreadsheetId}
-                driveFolderId={serverConfig.driveFolderId}
-                spreadsheetTitle={dataset.spreadsheetTitle}
-                hasServerGasUrl={serverConfig.hasServerGasUrl}
-                gasUrlInput={gasUrl}
-                gasSecretInput={gasSecret}
-                isSigningIn={isSigningIn}
-                isConnectingGas={isConnectingGas}
-                isBootstrapping={isBootstrapping}
-                lastError={lastError}
-                onGoogleSignIn={handleGoogleSignIn}
-                onGoogleLogout={handleGoogleLogout}
-                onConnectGas={handleConnectGas}
-                onDisconnectGas={handleDisconnectGas}
-                onBootstrapSheets={handleBootstrapSheets}
-                onNotify={notify}
-              />
-            ) : connectionMode === 'disconnected' ? (
-              renderDisconnectedNotice()
+            {connectionMode === 'loading' ? (
+              <div className="flex min-h-[50vh] items-center justify-center">
+                <div className="flex items-center gap-2.5 text-sm text-slate-500">
+                  <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                  <span>กำลังโหลดข้อมูลจริงจาก Google Sheets...</span>
+                </div>
+              </div>
+            ) : connectionMode === 'unconfigured' ? (
+              renderServerConfigNotice()
             ) : currentPage === 'dashboard' ? (
               <DashboardView
                 selectedYear={selectedYear}
