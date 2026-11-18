@@ -1,5 +1,7 @@
 export const DEFAULT_SPREADSHEET_ID = '13QVZGyyxjqNvAXD1X0r8KmWIyk3iW53bJF0u0LUphI8';
 export const DEFAULT_DRIVE_FOLDER_ID = '1kbLUdllMc-WhXXGlXg9UA_2i87SyS4aB';
+export const DEPLOYED_GAS_WEB_APP_URL =
+  'https://script.google.com/macros/s/AKfycbyR7aScL9X2AFyhwh-c9G_r_q8gVkiEjSKPzkyTrxHPOo27MSYNMd4Rxub8jrTwLlISrA/exec';
 export const DEFAULT_PRODUCTION_YEAR_NAME = '2569/70';
 
 export const SHEET_NAMES = {

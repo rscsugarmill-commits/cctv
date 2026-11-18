@@ -114,6 +114,7 @@ export default function App() {
       setIsLoadingData(true);
       setLastError(null);
       try {
+        await apiClient.ensureReady();
         let data = await apiClient.fetchAllData();
         const activeYears = data.years.filter((y) => y.is_active);
         const activeCranes = data.cranes.filter((c) => c.is_active);
@@ -134,11 +135,8 @@ export default function App() {
       } catch (err: any) {
         const msg = err?.message || 'ไม่สามารถดึงข้อมูลจาก Google Sheets ได้';
         setLastError(msg);
-        if (err?.code === 'SERVER_CONFIG_MISSING') {
-          setConnectionMode('unconfigured');
-        } else {
-          notify('error', 'โหลดข้อมูลไม่สำเร็จ', msg);
-        }
+        setConnectionMode('unconfigured');
+        notify('error', 'โหลดข้อมูลไม่สำเร็จ', msg);
       } finally {
         setIsLoadingData(false);
       }
@@ -148,21 +146,7 @@ export default function App() {
 
   const initializeConnection = useCallback(async () => {
     setConnectionMode('loading');
-    setLastError(null);
-    try {
-      const cfg = await apiClient.getConfig();
-      if (!cfg.connected) {
-        setConnectionMode('unconfigured');
-        setLastError(
-          'ยังไม่ได้ตั้งค่า GAS_WEB_APP_URL หรือ GOOGLE_SERVICE_ACCOUNT_JSON ใน Environment ของเซิร์ฟเวอร์'
-        );
-        return;
-      }
-      await loadSheetsData(true);
-    } catch (err: any) {
-      setConnectionMode('unconfigured');
-      setLastError(err?.message || 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้');
-    }
+    await loadSheetsData(true);
   }, [loadSheetsData]);
 
   useEffect(() => {
@@ -250,18 +234,18 @@ export default function App() {
 
   const renderServerConfigNotice = () => (
     <div className="mx-auto max-w-2xl py-8">
-      <div className="rounded-xl border border-amber-200 bg-white p-6 shadow-xs sm:p-8">
+      <div className="rounded-xl border border-red-200 bg-white p-6 shadow-xs sm:p-8">
         <div className="flex items-start gap-3.5">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
             <Database className="h-6 w-6" />
           </div>
           <div>
             <h2 className="text-lg font-bold text-slate-900">
-              รอการตั้งค่าการเชื่อมต่อฝั่งเซิร์ฟเวอร์ (Google Sheets &amp; Google Drive)
+              ไม่สามารถเชื่อมต่อฐานข้อมูล Google Sheets และ Google Drive ได้ชั่วคราว
             </h2>
             <p className="mt-1.5 text-sm leading-relaxed text-slate-600">
-              ระบบนี้ไม่ใช้การ Login และไม่ใช้ Firebase โดยทุกอุปกรณ์จะดึงและบันทึกข้อมูลลงใน
-              Google Sheet และ Google Drive ชุดเดียวกันโดยตรงผ่าน Backend ของเซิร์ฟเวอร์
+              กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือสิทธิ์เข้าถึง Google Apps Script Web App
+              แล้วกดลองใหม่อีกครั้ง
             </p>
           </div>
         </div>
@@ -288,22 +272,6 @@ export default function App() {
           </div>
         )}
 
-        <div className="mt-5 space-y-2 rounded-lg border border-slate-200 bg-white p-4 text-xs leading-relaxed text-slate-700">
-          <p className="font-semibold text-slate-900">วิธีเปิดใช้งานทันทีสำหรับทุกอุปกรณ์:</p>
-          <ol className="list-decimal space-y-1 pl-4">
-            <li>
-              นำไฟล์ <code className="rounded bg-slate-100 px-1 py-0.5">gas/Code.gs</code> ไป
-              Deploy เป็น Google Apps Script Web App (Execute as: Me, Who has access: Anyone)
-            </li>
-            <li>
-              นำ Web App URL ไปใส่ใน Secrets / <code className="rounded bg-slate-100 px-1 py-0.5">.env</code>{' '}
-              ที่ตัวแปร <code className="rounded bg-slate-100 px-1 py-0.5">GAS_WEB_APP_URL</code>{' '}
-              (หรือใส่ <code className="rounded bg-slate-100 px-1 py-0.5">GOOGLE_SERVICE_ACCOUNT_JSON</code>)
-            </li>
-            <li>เมื่อตั้งค่าแล้ว ทุกอุปกรณ์จะเชื่อมต่อเข้าใช้งานข้อมูลชุดเดียวกันทันทีโดยไม่ต้อง Login</li>
-          </ol>
-        </div>
-
         <div className="mt-6">
           <button
             type="button"
@@ -312,7 +280,7 @@ export default function App() {
             className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
           >
             <RefreshCw className={`h-4 w-4 ${isLoadingData ? 'animate-spin' : ''}`} />
-            <span>ตรวจสอบการเชื่อมต่ออีกครั้ง</span>
+            <span>ลองเชื่อมต่อใหม่อีกครั้ง</span>
           </button>
         </div>
       </div>
